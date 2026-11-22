@@ -1,202 +1,230 @@
-"""One ingredient, one picture: a single glistening lemon slice.
+#!/usr/bin/env python3
+"""One glistening lemon slice, drawn fresh with PIL.
 
-main.py (Python 3.13, Pillow only, no network, deterministic) draws a
-1024x1024 PNG of one fresh lemon slice -- rind, pith, juicy segments,
-droplets and gloss -- on a dark slate backdrop, and writes it to
-/output/entry.png (or $MAKEFUN_OUTPUT_DIR/entry.png).
+A single lemon wheel on a dark slate background, lit warmly from the
+top-left: golden rind, pale pith, juicy translucent segments full of
+vesicles, and beads of juice catching the light. Deterministic, no
+network, no input files. Writes /output/entry.png (1024x1024).
 """
+
 import math
 import os
 import random
+
 from PIL import Image, ImageDraw, ImageFilter
 
-W = H = 1024
-CX, CY = 512, 500          # slice centre (slightly above middle)
-R = 380                    # outer radius of the slice
+SIZE = 1024
+SS = 2  # supersample factor for smooth edges
+W = SIZE * SS
+CX, CY = W // 2, W // 2 - 10 * SS
+R_OUT = 385 * SS          # outer rind edge
+R_RIND = 352 * SS         # rind / pith boundary
+R_PITH = 330 * SS         # pith / flesh boundary
+R_CORE = 34 * SS          # central core
+N_SEG = 10
+
 rng = random.Random(20261123)
 
 
 def lerp(a, b, t):
-    return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
+    return tuple(int(round(a[i] + (b[i] - a[i]) * t)) for i in range(3))
 
 
-def radial_bg(size):
-    """Dark green-charcoal backdrop, brighter behind the slice."""
-    img = Image.new("RGB", (size, size))
+def radial_bg():
+    """Dark green-slate background, softly lit behind the lemon."""
+    img = Image.new("RGB", (W, W), (10, 16, 12))
     px = img.load()
-    cx, cy = size // 2, size // 2 - 40
-    for y in range(size):
-        for x in range(size):
-            d = math.hypot(x - cx, y - cy) / (size * 0.72)
+    cx0, cy0 = W * 0.42, W * 0.38
+    for y in range(0, W, 2):
+        for x in range(0, W, 2):
+            d = math.hypot(x - cx0, y - cy0) / (W * 0.62)
             t = min(1.0, d)
-            # warm dark centre -> near-black green edges
-            px[x, y] = lerp((52, 66, 46), (10, 14, 11), t)
+            c = lerp((52, 66, 46), (8, 13, 10), t * t)
+            px[x, y] = c
+            px[x + 1, y] = c
+            px[x, y + 1] = c
+            px[x + 1, y + 1] = c
     return img
 
 
-def draw_soft_shadow(base):
-    sh = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    d = ImageDraw.Draw(sh)
-    d.ellipse([CX - 360, CY + 300, CX + 360, CY + 395], fill=(0, 0, 0, 150))
-    sh = sh.filter(ImageFilter.GaussianBlur(28))
-    base.alpha_composite(sh)
-
-
-def lemon_slice(base):
-    """Draw the slice on its own layer so we can tilt it slightly."""
-    layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+def soft_shadow(base):
+    """Soft elliptical shadow under the wheel, lower right."""
+    layer = Image.new("RGBA", (W, W), (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
-    # NOTE: PIL ImageDraw REPLACES pixels instead of blending, so every
-    # semi-transparent detail (dimples, vesicles, droplets) must live on
-    # a separate overlay that is alpha-composited at the end -- drawing
-    # them straight on `layer` would punch dark see-through holes.
-    ov = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    od = ImageDraw.Draw(ov)
+    d.ellipse([CX - R_OUT * 0.98, CY + R_OUT * 0.72,
+               CX + R_OUT * 1.02, CY + R_OUT * 1.06],
+              fill=(0, 0, 0, 150))
+    layer = layer.filter(ImageFilter.GaussianBlur(26 * SS))
+    base.alpha_composite(layer)
 
-    # --- outer rind: deep yellow ring with a bumpy edge -------------
-    for r, col in ((R, (176, 138, 8)), (R - 14, (214, 176, 16)),
-                   (R - 30, (240, 205, 32))):
-        d.ellipse([CX - r, CY - r, CX + r, CY + r], fill=col + (255,))
-    # rind dimples: faint warm pits, never dark (dark reads as dirt)
-    for _ in range(200):
-        a = rng.uniform(0, 2 * math.pi)
-        rr = rng.uniform(R - 30, R - 2)
-        x, y = CX + rr * math.cos(a), CY + rr * math.sin(a)
-        s = rng.uniform(1.5, 4)
-        od.ellipse([x - s, y - s, x + s, y + s],
-                   fill=(206, 164, 20, 55))
 
-    # --- white pith ring -------------------------------------------
-    d.ellipse([CX - (R - 34), CY - (R - 34), CX + (R - 34), CY + (R - 34)],
-              fill=(250, 246, 224, 255))
-    d.ellipse([CX - (R - 52), CY - (R - 52), CX + (R - 52), CY + (R - 52)],
-              fill=(255, 244, 130, 255))
+def draw_rind(draw):
+    """Golden rind: deep gold at the rim, bright yellow toward the pith."""
+    steps = 60
+    for i in range(steps):
+        t = i / steps
+        r0 = R_OUT - (R_OUT - R_RIND) * t
+        r1 = R_OUT - (R_OUT - R_RIND) * (i + 1) / steps
+        # warm light from the top-left brightens the upper rim
+        c = lerp((176, 118, 8), (248, 205, 40), t)
+        draw.ellipse([CX - r0, CY - r0, CX + r0, CY + r0],
+                     outline=c, width=max(2, int((r0 - r1) + 2)))
 
-    # --- flesh: pale yellow disc, deeper gold toward the rim --------
-    flesh_r = R - 56
-    flesh = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    fd = ImageDraw.Draw(flesh)
-    for rr in range(flesh_r, 0, -6):
-        t = rr / flesh_r  # 1 at rim, 0 at centre
-        fd.ellipse([CX - rr, CY - rr, CX + rr, CY + rr],
-                   fill=lerp((255, 244, 140), (250, 214, 60), t) + (255,))
-    layer.alpha_composite(flesh)
+
+def draw_pith(draw):
+    # pale pith fills the whole band between rind and flesh
+    draw.ellipse([CX - R_RIND, CY - R_RIND, CX + R_RIND, CY + R_RIND],
+                 fill=(250, 246, 214))
+    draw.ellipse([CX - R_RIND, CY - R_RIND, CX + R_RIND, CY + R_RIND],
+                 outline=(232, 222, 170), width=3 * SS)
+    draw.ellipse([CX - R_PITH, CY - R_PITH, CX + R_PITH, CY + R_PITH],
+                 outline=(226, 214, 160), width=3 * SS)
+
+
+def segment_flesh(draw):
+    """Juicy flesh: each wedge gets its own radial pale-to-gold gradient."""
+    flesh = Image.new("RGBA", (W, W), (0, 0, 0, 0))
+    fp = flesh.load()
+    for y in range(CY - R_PITH, CY + R_PITH):
+        for x in range(CX - R_PITH, CX + R_PITH):
+            dx, dy = x - CX, y - CY
+            r = math.hypot(dx, dy)
+            if r > R_PITH - 2 * SS or r < R_CORE:
+                continue
+            ang = math.degrees(math.atan2(dy, dx)) % 360.0
+            seg = int(ang // (360.0 / N_SEG))
+            within = (ang % (360.0 / N_SEG)) / (360.0 / N_SEG)
+            # gentle crease near each membrane, never muddy
+            edge = min(within, 1.0 - within) * 2.0
+            shade = 0.93 + 0.07 * min(1.0, edge * 3.0)
+            # pale near the core, saturated gold toward the rim
+            t = (r - R_CORE) / (R_PITH - R_CORE)
+            base = lerp((255, 244, 170), (250, 196, 30), t)
+            # slight per-segment hue jitter so wedges read individually
+            jit = (seg * 37 % 11 - 5) / 255.0
+            col = tuple(max(0, min(255, int(c * shade + jit * 255)))
+                        for c in base)
+            fp[x, y] = col + (255,)
+    return flesh
+
+
+def draw_membranes(draw):
+    """White membranes radiating from the core to the pith."""
+    for i in range(N_SEG):
+        a = math.radians(i * 360.0 / N_SEG - 90)
+        x1 = CX + int(math.cos(a) * (R_CORE + 4 * SS))
+        y1 = CY + int(math.sin(a) * (R_CORE + 4 * SS))
+        x2 = CX + int(math.cos(a) * (R_PITH - 3 * SS))
+        y2 = CY + int(math.sin(a) * (R_PITH - 3 * SS))
+        draw.line([x1, y1, x2, y2], fill=(252, 250, 226), width=5 * SS)
+        draw.line([x1, y1, x2, y2], fill=(255, 255, 244), width=2 * SS)
+
+
+def draw_core(draw):
+    draw.ellipse([CX - R_CORE, CY - R_CORE, CX + R_CORE, CY + R_CORE],
+                 fill=(250, 240, 190), outline=(240, 224, 150),
+                 width=3 * SS)
+    draw.ellipse([CX - R_CORE // 2, CY - R_CORE // 2,
+                  CX + R_CORE // 2, CY + R_CORE // 2],
+                 fill=(245, 222, 120))
+
+
+def draw_vesicles(draw):
+    """Juice vesicles: short pale dashes fanning out inside each wedge."""
+    for seg in range(N_SEG):
+        a0 = math.radians(seg * 360.0 / N_SEG - 90)
+        for _ in range(30):
+            rr = rng.uniform(R_CORE + 60 * SS, R_PITH - 14 * SS)
+            aa = a0 + rng.uniform(0.05, (360.0 / N_SEG - 0.05)
+                                  * math.pi / 180.0)
+            # slight angular wobble so vesicles feel organic, not ruled
+            aa += rng.uniform(-0.03, 0.03)
+            x = CX + rr * math.cos(aa)
+            y = CY + rr * math.sin(aa)
+            ln = rng.uniform(8, 16) * SS
+            # dash runs outward from the core
+            ux, uy = math.cos(aa), math.sin(aa)
+            col = (255, 253, 225, rng.randint(200, 235))
+            draw.line([x - ux * ln / 2, y - uy * ln / 2,
+                       x + ux * ln / 2, y + uy * ln / 2],
+                      fill=col, width=2 * SS)
+
+
+def gloss(base):
+    """Warm gloss: big soft highlight top-left, small specular beads."""
+    layer = Image.new("RGBA", (W, W), (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
+    gx, gy = CX - R_OUT * 0.42, CY - R_OUT * 0.46
+    for r, alpha in ((170, 40), (120, 64), (75, 100), (40, 140)):
+        d.ellipse([gx - r * SS, gy - r * SS * 0.62,
+                   gx + r * SS, gy + r * SS * 0.62],
+                  fill=(255, 250, 220, alpha))
+    layer = layer.filter(ImageFilter.GaussianBlur(18 * SS))
+    base.alpha_composite(layer)
+    # bright crescent on the rind itself, top-left, where the light hits
+    cres = Image.new("RGBA", (W, W), (0, 0, 0, 0))
+    dc = ImageDraw.Draw(cres)
+    dc.arc([CX - R_OUT, CY - R_OUT, CX + R_OUT, CY + R_OUT],
+           start=185, end=295, fill=(255, 246, 200, 150), width=26 * SS)
+    cres = cres.filter(ImageFilter.GaussianBlur(10 * SS))
+    base.alpha_composite(cres)
 
-    # --- segments: 11 wedges split by pale membranes ---------------
-    n = 11
-    for i in range(n):
-        a0 = 2 * math.pi * i / n + 0.06
-        a1 = 2 * math.pi * (i + 1) / n - 0.06
-        # wedge slightly deeper yellow at its outer edge
-        d.pieslice([CX - flesh_r + 6, CY - flesh_r + 6,
-                    CX + flesh_r - 6, CY + flesh_r - 6],
-                   math.degrees(a0), math.degrees(a1),
-                   fill=(252, 224, 62, 255))
-        # juice vesicles: short warm-white radial strokes in the wedge
-        for _ in range(40):
-            ang = rng.uniform(a0 + 0.08, a1 - 0.08)
-            rr = rng.uniform(28, flesh_r - 26)
-            x0 = CX + rr * math.cos(ang)
-            y0 = CY + rr * math.sin(ang)
-            ln = rng.uniform(6, 13)
-            x1 = x0 + ln * math.cos(ang)
-            y1 = y0 + ln * math.sin(ang)
-            od.line([x0, y0, x1, y1], fill=(255, 252, 205, 170), width=2)
-        # membrane: pale line from centre to rim
-        am = 2 * math.pi * (i + 1) / n
-        d.line([CX + 14 * math.cos(am), CY + 14 * math.sin(am),
-                CX + (flesh_r - 4) * math.cos(am),
-                CY + (flesh_r - 4) * math.sin(am)],
-               fill=(255, 252, 225, 255), width=9)
 
-    # --- centre star -------------------------------------------------
-    d.ellipse([CX - 26, CY - 26, CX + 26, CY + 26],
-              fill=(255, 252, 225, 255))
-    d.ellipse([CX - 15, CY - 15, CX + 15, CY + 15],
-              fill=(240, 222, 90, 255))
-
-    # --- gloss: big soft highlight upper-left on the flesh ----------
-    gloss = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    g = ImageDraw.Draw(gloss)
-    g.ellipse([CX - 310, CY - 340, CX + 60, CY - 40],
-              fill=(255, 255, 255, 95))
-    g.ellipse([CX - 220, CY - 290, CX - 30, CY - 140],
-              fill=(255, 255, 255, 120))
-    gloss = gloss.filter(ImageFilter.GaussianBlur(26))
-    layer.alpha_composite(gloss)
-
-    # --- juice droplets: pale-yellow translucent beads ---------------
-    for _ in range(42):
+def droplets(base):
+    """Beads of juice on the flesh and scattered on the dark table."""
+    layer = Image.new("RGBA", (W, W), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    # on the flesh, near the rim
+    for _ in range(14):
         a = rng.uniform(0, 2 * math.pi)
-        rr = rng.uniform(R - 40, R + 26)
-        x, y = CX + rr * math.cos(a), CY + rr * math.sin(a)
-        s = rng.uniform(4, 11)
-        od.ellipse([x - s, y - s * 0.8, x + s, y + s * 0.8],
-                   fill=(255, 246, 150, 170), outline=(255, 255, 230, 230))
-        od.ellipse([x - s * 0.45, y - s * 0.5, x + s * 0.1, y - s * 0.05],
-                   fill=(255, 255, 255, 235))
-    # a few beads resting on the flesh itself
-    for _ in range(10):
-        a = rng.uniform(0, 2 * math.pi)
-        rr = rng.uniform(60, flesh_r - 40)
-        x, y = CX + rr * math.cos(a), CY + rr * math.sin(a)
-        s = rng.uniform(5, 9)
-        od.ellipse([x - s, y - s * 0.8, x + s, y + s * 0.8],
-                   fill=(255, 250, 190, 150), outline=(255, 255, 240, 200))
-        od.ellipse([x - s * 0.4, y - s * 0.45, x + s * 0.15, y - s * 0.05],
-                   fill=(255, 255, 255, 230))
-
-    # warm rim light: a soft golden arc on the lower-right rind
-    rim = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    rd = ImageDraw.Draw(rim)
-    rd.arc([CX - R - 6, CY - R - 6, CX + R + 6, CY + R + 6],
-           start=15, end=105, fill=(255, 226, 110, 130), width=16)
-    rim = rim.filter(ImageFilter.GaussianBlur(10))
-    layer.alpha_composite(rim)
-
-    layer.alpha_composite(ov)
-    return layer
-
-
-def droplets_around(base):
-    """A few juice drops and a splash arc flying off the slice."""
-    d = ImageDraw.Draw(base)
-    for (x, y, s) in [(150, 830, 12), (205, 885, 8), (880, 850, 13),
-                      (845, 905, 7), (905, 790, 6), (120, 760, 6)]:
-        d.ellipse([x - s, y - s, x + s, y + s],
-                  fill=(250, 230, 90, 255), outline=(255, 255, 220, 255))
-        d.ellipse([x - s * 0.4, y - s * 0.45, x + s * 0.15, y - s * 0.1],
+        rr = rng.uniform(R_PITH * 0.55, R_PITH * 0.92)
+        x = CX + rr * math.cos(a)
+        y = CY + rr * math.sin(a)
+        r = rng.uniform(5, 11) * SS
+        d.ellipse([x - r, y - r * 0.85, x + r, y + r * 0.85],
+                  fill=(255, 246, 180, 210), outline=(255, 255, 235, 255),
+                  width=2 * SS)
+        d.ellipse([x - r * 0.45, y - r * 0.55, x + r * 0.1, y - r * 0.05],
                   fill=(255, 255, 255, 235))
-
-
-def vignette(base):
-    vg = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    d = ImageDraw.Draw(vg)
-    d.rectangle([0, 0, W, H], outline=(0, 0, 0, 170), width=90)
-    vg = vg.filter(ImageFilter.GaussianBlur(60))
-    base.alpha_composite(vg)
+    # on the table around the wheel, clustered close to the rim
+    for _ in range(9):
+        a = rng.uniform(0, 2 * math.pi)
+        rr = rng.uniform(R_OUT * 1.05, R_OUT * 1.22)
+        x = CX + rr * math.cos(a)
+        y = CY + rr * math.sin(a)
+        if y < 40 * SS or y > W - 40 * SS:
+            continue
+        r = rng.uniform(4, 12) * SS
+        d.ellipse([x - r, y - r * 0.8, x + r, y + r * 0.8],
+                  fill=(240, 214, 90, 190), outline=(255, 244, 190, 230),
+                  width=2 * SS)
+        d.ellipse([x - r * 0.4, y - r * 0.5, x + r * 0.15, y - r * 0.05],
+                  fill=(255, 255, 240, 220))
+    base.alpha_composite(layer)
 
 
 def main():
-    img = radial_bg(W).convert("RGBA")
-    draw_soft_shadow(img)
-    layer = lemon_slice(img)
-    layer = layer.rotate(-8, center=(CX, CY), resample=Image.BICUBIC)
-    img.alpha_composite(layer)
-    droplets_around(img)
-    vignette(img)
-
-    outdir = os.environ.get("MAKEFUN_OUTPUT_DIR") or "/output"
-    try:
-        os.makedirs(outdir, exist_ok=True)
-        path = os.path.join(outdir, "entry.png")
-        img.convert("RGB").save(path, "PNG", optimize=True)
-    except OSError:
-        os.makedirs("output", exist_ok=True)
-        path = os.path.join("output", "entry.png")
-        img.convert("RGB").save(path, "PNG", optimize=True)
-    print("wrote", path, os.path.getsize(path), "bytes")
+    img = radial_bg().convert("RGBA")
+    soft_shadow(img)
+    ov = Image.new("RGBA", (W, W), (0, 0, 0, 0))
+    d = ImageDraw.Draw(ov)
+    draw_rind(d)
+    draw_pith(d)
+    flesh = segment_flesh(d)
+    ov.alpha_composite(flesh)
+    d = ImageDraw.Draw(ov)
+    draw_membranes(d)
+    draw_core(d)
+    draw_vesicles(d)
+    img.alpha_composite(ov)
+    gloss(img)
+    droplets(img)
+    img = img.convert("RGB").resize((SIZE, SIZE), Image.LANCZOS)
+    out = os.environ.get("OUTPUT_PATH", "/output/entry.png")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    img.save(out, "PNG", optimize=True)
+    print("wrote", out, img.size,
+          os.path.getsize(out), "bytes")
 
 
 if __name__ == "__main__":
