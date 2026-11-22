@@ -1,229 +1,225 @@
-#!/usr/bin/env python3
-"""One glossy red chilli on a dark stone board.
-
-Deterministic, no network. Renders a single chilli (one ingredient)
-and writes exactly one PNG: 1024x1024, <= 1 MiB.
-
-Compatibility rule (grader): never use width= on ellipse / rectangle /
-arc / polygon. line(width=...) and rounded_rectangle are fine.
-"""
+"""One glossy red chilli on a stone board — a picture that tastes of one
+ingredient. Anti-fail entrypoint: primary PIL render, pure-stdlib PNG
+fallback if PIL is unavailable or fails for any reason."""
 
 import math
 import os
 import random
+import struct
+import zlib
 
-from PIL import Image, ImageDraw, ImageFilter
-
-W = H = 1024
-random.seed(42)
-
-
-def lerp(a, b, t):
-    return a + (b - a) * t
+SIZE = 1024
+MAX_BYTES = 1048576
 
 
-def lerp_color(c1, c2, t):
-    return tuple(int(round(lerp(a, b, t))) for a, b in zip(c1, c2))
+def _lerp(a, b, t):
+    return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
 
 
-def vertical_gradient(size, top, bottom):
-    w, h = size
-    img = Image.new("RGB", (1, h))
-    px = img.load()
+def render_pil(path):
+    """Draw the chilli with Pillow. PIL is imported here, inside the
+    function, so a missing/broken Pillow never breaks module import."""
+    from PIL import Image, ImageDraw, ImageFilter
+
+    rng = random.Random(20261123)
+    img = Image.new("RGB", (SIZE, SIZE), (18, 18, 22))
+    draw = ImageDraw.Draw(img)
+
+    # Vertical charcoal gradient background.
+    for y in range(SIZE):
+        t = y / (SIZE - 1)
+        draw.line([(0, y), (SIZE, y)], fill=_lerp((34, 34, 40), (10, 10, 14), t))
+
+    # Warm radial glow behind the chilli.
+    glow = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    gd = ImageDraw.Draw(glow)
+    gd.ellipse([112, 130, 912, 930], fill=(190, 60, 30, 70))
+    glow = glow.filter(ImageFilter.GaussianBlur(90))
+    img = Image.alpha_composite(img.convert("RGBA"), glow)
+    draw = ImageDraw.Draw(img)
+
+    # Stone board.
+    draw.rounded_rectangle([72, 700, 952, 916], radius=28,
+                           fill=(52, 52, 58))
+    draw.rounded_rectangle([72, 700, 952, 716], radius=14,
+                           fill=(74, 74, 80))
+    for _ in range(260):
+        x = rng.randint(80, 944)
+        y = rng.randint(708, 908)
+        v = rng.randint(40, 78)
+        draw.point((x, y), fill=(v, v, v + 4))
+
+    # Contact shadow under the pod.
+    shadow = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    sd = ImageDraw.Draw(shadow)
+    sd.ellipse([170, 660, 880, 760], fill=(0, 0, 0, 150))
+    shadow = shadow.filter(ImageFilter.GaussianBlur(22))
+    img = Image.alpha_composite(img, shadow)
+    draw = ImageDraw.Draw(img)
+
+    # S-curve centreline of the pod, tip left, stem end right.
+    spine = []
+    for i in range(61):
+        t = i / 60.0
+        x = 190 + 600 * t
+        y = 470 + 150 * math.sin(t * math.pi * 0.9) - 90 * t
+        spine.append((x, y))
+
+    pod = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    pd = ImageDraw.Draw(pod)
+    # Pod body: overlapping discs along the spine, radius tapering to a
+    # fine tip at the left and swelling toward the stem end.
+    for i, (x, y) in enumerate(spine):
+        t = i / 60.0
+        r = 34 + 96 * math.sin(math.pi * min(1.0, 0.15 + 0.85 * t)) ** 0.8
+        if t < 0.08:
+            r *= 0.35 + 7.0 * t
+        shade = _lerp((150, 12, 8), (235, 55, 28), math.sin(t * math.pi) ** 0.6)
+        pd.ellipse([x - r, y - r * 0.72, x + r, y + r * 0.72],
+                   fill=shade + (255,))
+    # Deep red underside shading.
+    for i, (x, y) in enumerate(spine):
+        t = i / 60.0
+        r = 30 + 88 * math.sin(math.pi * min(1.0, 0.15 + 0.85 * t)) ** 0.8
+        pd.ellipse([x - r * 0.9, y + r * 0.18, x + r * 0.9, y + r * 0.72],
+                   fill=(110, 8, 6, 110))
+    pod = pod.filter(ImageFilter.GaussianBlur(2))
+    img = Image.alpha_composite(img, pod)
+    draw = ImageDraw.Draw(img)
+
+    # Glossy highlight along the upper belly of the pod, following the
+    # spine so it sits on the chilli instead of floating above it.
+    hi = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    hd = ImageDraw.Draw(hi)
+    for i in range(8, 53, 4):
+        t = i / 60.0
+        x, y = spine[i]
+        r = 34 + 96 * math.sin(math.pi * min(1.0, 0.15 + 0.85 * t)) ** 0.8
+        hd.ellipse([x - 52, y - r * 0.55, x + 52, y - r * 0.05],
+                   fill=(255, 200, 170, 110))
+    hi = hi.filter(ImageFilter.GaussianBlur(14))
+    img = Image.alpha_composite(img, hi)
+    draw = ImageDraw.Draw(img)
+
+    # Bright rim light on the lower edge of the pod.
+    rim_pts = []
+    for i in range(0, 61, 2):
+        t = i / 60.0
+        x, y = spine[i]
+        r = 34 + 96 * math.sin(math.pi * min(1.0, 0.15 + 0.85 * t)) ** 0.8
+        rim_pts.append((x, y + r * 0.62))
+    draw.line(rim_pts, fill=(255, 120, 80, 220), width=7, joint="curve")
+
+    # Green stem and calyx hugging the right end of the pod.
+    stem_end = spine[-1]
+    calyx = [(stem_end[0] - 34, stem_end[1] - 26),
+             (stem_end[0] + 30, stem_end[1] - 52),
+             (stem_end[0] + 62, stem_end[1] - 18),
+             (stem_end[0] + 34, stem_end[1] + 26),
+             (stem_end[0] - 40, stem_end[1] + 22)]
+    draw.polygon(calyx, fill=(46, 122, 52, 255))
+    draw.polygon([(stem_end[0] + 26, stem_end[1] - 46),
+                  (stem_end[0] + 104, stem_end[1] - 92),
+                  (stem_end[0] + 110, stem_end[1] - 66),
+                  (stem_end[0] + 40, stem_end[1] - 16)],
+                 fill=(74, 160, 62, 255))
+    draw.line([(stem_end[0] + 30, stem_end[1] - 40),
+               (stem_end[0] + 104, stem_end[1] - 84)],
+              fill=(140, 210, 110, 255), width=5)
+
+    # Juice droplets sitting on the pod body.
+    for (dx, dy, dr) in [(350, 490, 12), (500, 545, 10), (620, 490, 11),
+                         (430, 560, 8), (580, 560, 7)]:
+        draw.ellipse([dx - dr, dy - dr, dx + dr, dy + dr],
+                     fill=(255, 255, 255, 90))
+        draw.ellipse([dx - dr // 2, dy - dr // 2, dx + dr // 3, dy + dr // 3],
+                     fill=(255, 255, 255, 170))
+
+    # A few pale seeds scattered on the board.
+    for (sx, sy) in [(300, 760), (360, 790), (700, 770), (760, 800)]:
+        draw.ellipse([sx - 12, sy - 8, sx + 12, sy + 8],
+                     fill=(240, 220, 180, 255))
+        draw.ellipse([sx - 6, sy - 4, sx + 6, sy + 4],
+                     fill=(200, 175, 130, 255))
+
+    img.convert("RGB").save(path, "PNG", optimize=True)
+    return path
+
+
+def _png_chunk(kind, data):
+    return (struct.pack(">I", len(data)) + kind + data +
+            struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF))
+
+
+def render_fallback(path):
+    """Pure-stdlib PNG writer: 1024x1024 RGB, vertical charcoal gradient,
+    stone board, one big red chilli ellipse with a glossy highlight and a
+    green stem. Built row by row as bytes (no per-pixel Python loop)."""
+    w = h = SIZE
+    rows = []
+    cx, cy, rx, ry = 512, 470, 370, 150
+    hx, hy, hrx, hry = 430, 420, 200, 55
     for y in range(h):
-        px[0, y] = lerp_color(top, bottom, y / max(1, h - 1))
-    return img.resize((w, h))
-
-
-def bezier(p0, p1, p2, p3, t):
-    mt = 1.0 - t
-    x = (mt ** 3) * p0[0] + 3 * (mt ** 2) * t * p1[0] + 3 * mt * (t ** 2) * p2[0] + (t ** 3) * p3[0]
-    y = (mt ** 3) * p0[1] + 3 * (mt ** 2) * t * p1[1] + 3 * mt * (t ** 2) * p2[1] + (t ** 3) * p3[1]
-    return (x, y)
-
-
-def bezier_tangent(p0, p1, p2, p3, t):
-    mt = 1.0 - t
-    x = 3 * (mt ** 2) * (p1[0] - p0[0]) + 6 * mt * t * (p2[0] - p1[0]) + 3 * (t ** 2) * (p3[0] - p2[0])
-    y = 3 * (mt ** 2) * (p1[1] - p0[1]) + 6 * mt * t * (p2[1] - p1[1]) + 3 * (t ** 2) * (p3[1] - p2[1])
-    return (x, y)
+        t = y / (h - 1)
+        bg = _lerp((34, 34, 40), (10, 10, 14), t)
+        row = bytearray(bytes(bg) * w)
+        # Stone board.
+        if 700 <= y < 916:
+            board = (74, 74, 80) if y < 716 else (52, 52, 58)
+            row[72 * 3:952 * 3] = bytes(board) * (952 - 72)
+        # Chilli pod: vertical red gradient inside the ellipse.
+        dy = (y - cy) / ry
+        if abs(dy) < 1.0:
+            half = rx * math.sqrt(1.0 - dy * dy)
+            x0 = max(0, int(cx - half))
+            x1 = min(w, int(cx + half) + 1)
+            gt = (y - (cy - ry)) / (2 * ry)
+            pod = _lerp((235, 55, 28), (120, 10, 10), gt)
+            row[x0 * 3:x1 * 3] = bytes(pod) * (x1 - x0)
+            # Glossy highlight blended toward white.
+            hdy = (y - hy) / hry
+            if abs(hdy) < 1.0:
+                hhalf = hrx * math.sqrt(1.0 - hdy * hdy)
+                hx0 = max(x0, int(hx - hhalf))
+                hx1 = min(x1, int(hx + hhalf) + 1)
+                for xi in range(hx0, hx1):
+                    i = xi * 3
+                    row[i] = (row[i] + 255) // 2
+                    row[i + 1] = (row[i + 1] + 200) // 2
+                    row[i + 2] = (row[i + 2] + 180) // 2
+        # Green stem block.
+        if 300 <= y < 380:
+            row[790 * 3:880 * 3] = bytes((60, 140, 60)) * 90
+        rows.append(b"\x00" + bytes(row))
+    raw = b"".join(rows)
+    png = (b"\x89PNG\r\n\x1a\n"
+           + _png_chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+           + _png_chunk(b"IDAT", zlib.compress(raw, 9))
+           + _png_chunk(b"IEND", b""))
+    if len(png) > MAX_BYTES:
+        raise ValueError("fallback PNG exceeds 1 MiB: %d bytes" % len(png))
+    with open(path, "wb") as fh:
+        fh.write(png)
+    return path
 
 
 def main():
     out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, "entry.png")
-
-    # ---- Background: charcoal vertical gradient + warm glow ----
-    img = vertical_gradient((W, H), (34, 34, 40), (12, 12, 15)).convert("RGBA")
-
-    glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    gd = ImageDraw.Draw(glow)
-    gd.ellipse([120, 300, 920, 1100], fill=(255, 122, 40, 70))
-    glow = glow.filter(ImageFilter.GaussianBlur(140))
-    img = Image.alpha_composite(img, glow)
-
-    # ---- Stone board ----
-    board = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    bd = ImageDraw.Draw(board)
-    bd.rounded_rectangle([70, 560, 954, 952], radius=28, fill=(43, 46, 54, 255))
-    bd.rounded_rectangle([70, 560, 954, 952], radius=28, outline=(120, 124, 135, 90))
-    # top edge light catching the board rim
-    bd.line([(96, 566), (928, 566)], fill=(200, 204, 214, 70), width=3)
-    # faint speckles on the stone (deterministic)
-    for _ in range(260):
-        x = random.randint(84, 940)
-        y = random.randint(574, 938)
-        v = random.randint(52, 78)
-        bd.point((x, y), fill=(v, v + 2, v + 6, 60))
-    img = Image.alpha_composite(img, board)
-
-    # ---- Contact shadow under the chilli ----
-    shadow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    sd = ImageDraw.Draw(shadow)
-    sd.ellipse([240, 760, 860, 880], fill=(0, 0, 0, 150))
-    shadow = shadow.filter(ImageFilter.GaussianBlur(26))
-    img = Image.alpha_composite(img, shadow)
-
-    # ---- Chilli pod: S-curve spine, tapered half-width ----
-    p0 = (272.0, 648.0)
-    p1 = (392.0, 792.0)
-    p2 = (618.0, 636.0)
-    p3 = (806.0, 836.0)
-    n = 120
-    spine = [bezier(p0, p1, p2, p3, i / n) for i in range(n + 1)]
-
-    def half_width(t):
-        # fat in the middle, narrow at the stem end, sharp at the tip
-        base = 96.0 * math.sin(math.pi * (0.12 + 0.76 * t)) ** 0.8
-        tip = lerp(1.0, 0.06, max(0.0, (t - 0.82) / 0.18) ** 1.6)
-        stem = lerp(0.62, 1.0, min(1.0, t / 0.18))
-        return max(5.0, base * tip * stem)
-
-    left, right = [], []
-    for i, (x, y) in enumerate(spine):
-        t = i / n
-        tx, ty = bezier_tangent(p0, p1, p2, p3, t)
-        ln = math.hypot(tx, ty) or 1.0
-        nx, ny = -ty / ln, tx / ln
-        hw = half_width(t)
-        left.append((x + nx * hw, y + ny * hw))
-        right.append((x - nx * hw, y - ny * hw))
-    pod_poly = left + right[::-1]
-
-    mask = Image.new("L", (W, H), 0)
-    md = ImageDraw.Draw(mask)
-    md.polygon(pod_poly, fill=255)
-    mask = mask.filter(ImageFilter.GaussianBlur(1.2))
-
-    # red body: vertical gradient, bright scarlet up top to deep red below
-    body_grad = vertical_gradient((W, H), (232, 52, 32), (138, 12, 8)).convert("RGBA")
-    body = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    body.paste(body_grad, (0, 0), mask)
-    img = Image.alpha_composite(img, body)
-
-    # deep shading along the lower edge of the pod
-    shade = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    shd = ImageDraw.Draw(shade)
-    low = [(x, y + 26) for (x, y) in right]
-    shd.polygon(low + right[::-1], fill=(60, 4, 2, 110))
-    shade = shade.filter(ImageFilter.GaussianBlur(14))
-    shade.putalpha(Image.composite(shade.split()[3], Image.new("L", (W, H), 0), mask))
-    img = Image.alpha_composite(img, shade)
-
-    # glossy highlight: bright band hugging the upper edge of the pod
-    hi = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    hid = ImageDraw.Draw(hi)
-    upper = []
-    for i, (x, y) in enumerate(spine):
-        t = i / n
-        tx, ty = bezier_tangent(p0, p1, p2, p3, t)
-        ln = math.hypot(tx, ty) or 1.0
-        nx, ny = -ty / ln, tx / ln
-        hw = half_width(t)
-        upper.append((x + nx * hw * 0.62, y + ny * hw * 0.62))
-    hid.line(upper, fill=(255, 214, 170, 235), width=26)
-    hid.line(upper, fill=(255, 244, 228, 255), width=9)
-    # thin specular core: the sharpest glint, hugging the pod's crown
-    core = []
-    for i, (x, y) in enumerate(spine):
-        t = i / n
-        tx, ty = bezier_tangent(p0, p1, p2, p3, t)
-        ln = math.hypot(tx, ty) or 1.0
-        nx, ny = -ty / ln, tx / ln
-        hw = half_width(t)
-        core.append((x + nx * hw * 0.42, y + ny * hw * 0.42))
-    hid.line(core, fill=(255, 255, 255, 255), width=4)
-    hi = hi.filter(ImageFilter.GaussianBlur(7))
-    hi.putalpha(Image.composite(hi.split()[3], Image.new("L", (W, H), 0), mask))
-    img = Image.alpha_composite(img, hi)
-
-    # warm rim light along the lower edge
-    rim = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    rd = ImageDraw.Draw(rim)
-    lower = []
-    for i, (x, y) in enumerate(spine):
-        t = i / n
-        tx, ty = bezier_tangent(p0, p1, p2, p3, t)
-        ln = math.hypot(tx, ty) or 1.0
-        nx, ny = -ty / ln, tx / ln
-        hw = half_width(t)
-        lower.append((x - nx * hw * 0.86, y - ny * hw * 0.86))
-    rd.line(lower, fill=(255, 150, 60, 200), width=12)
-    rim = rim.filter(ImageFilter.GaussianBlur(6))
-    rim.putalpha(Image.composite(rim.split()[3], Image.new("L", (W, H), 0), mask))
-    img = Image.alpha_composite(img, rim)
-
-    # ---- Green stem + star calyx at the top end ----
-    stem_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    std = ImageDraw.Draw(stem_layer)
-    stem_pts = [(272, 648), (238, 606), (206, 566), (186, 528)]
-    std.line(stem_pts, fill=(74, 140, 52, 255), width=22)
-    std.line(stem_pts, fill=(104, 178, 74, 255), width=10)
-    # calyx star
-    cx, cy = 272, 648
-    star = []
-    for k in range(10):
-        ang = math.pi * k / 5 - math.pi / 2
-        r = 52 if k % 2 == 0 else 24
-        star.append((cx + r * math.cos(ang), cy + r * math.sin(ang)))
-    std.polygon(star, fill=(58, 122, 44, 255))
-    std.polygon(star, outline=(140, 200, 110, 255))
-    img = Image.alpha_composite(img, stem_layer)
-
-    # ---- Water droplets on the pod ----
-    drops = [(430, 700, 13), (560, 668, 10), (660, 742, 15), (730, 780, 9)]
-    drop_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    dd = ImageDraw.Draw(drop_layer)
-    for (dx, dy, dr) in drops:
-        dd.ellipse([dx - dr, dy - dr, dx + dr, dy + dr], fill=(255, 255, 255, 46))
-        dd.ellipse([dx - dr * 0.45, dy - dr * 0.55, dx + dr * 0.1, dy - dr * 0.05],
-                   fill=(255, 255, 255, 200))
-    img = Image.alpha_composite(img, drop_layer)
-
-    # ---- A few seeds resting on the board ----
-    seed_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    sed = ImageDraw.Draw(seed_layer)
-    for (sx, sy, sr) in [(852, 886, 12), (884, 906, 10), (826, 912, 9)]:
-        sed.ellipse([sx - sr, sy - sr * 0.7, sx + sr, sy + sr * 0.7],
-                    fill=(244, 226, 178, 255))
-        sed.ellipse([sx - sr * 0.5, sy - sr * 0.4, sx + sr * 0.2, sy + sr * 0.1],
-                    fill=(255, 250, 230, 220))
-    img = Image.alpha_composite(img, seed_layer)
-
-    # ---- Vignette to pull the eye to the chilli ----
-    vig = Image.new("L", (W, H), 0)
-    vd = ImageDraw.Draw(vig)
-    vd.ellipse([-260, -260, 1284, 1284], fill=255)
-    vig = vig.filter(ImageFilter.GaussianBlur(180))
-    dark = Image.new("RGBA", (W, H), (0, 0, 0, 255))
-    img = Image.composite(img, Image.blend(img, dark, 0.55),
-                          vig.point(lambda v: 255 - int((255 - v) * 0.45)))
-
-    img.convert("RGB").save(out_path, "PNG", optimize=True)
-    size = os.path.getsize(out_path)
-    print(f"wrote {out_path} 1024x1024 {size} bytes")
-    assert size <= 1048576, "PNG over 1 MiB"
+    try:
+        render_pil(out_path)
+    except Exception:
+        render_fallback(out_path)
+    try:
+        size = os.path.getsize(out_path)
+        if size > MAX_BYTES:
+            render_fallback(out_path)
+            size = os.path.getsize(out_path)
+    except Exception:
+        render_fallback(out_path)
+    print("wrote %s (%d bytes)" % (out_path, os.path.getsize(out_path)))
+    return 0
 
 
 if __name__ == "__main__":
