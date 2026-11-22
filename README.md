@@ -1,25 +1,33 @@
-# One Red Chilli — The picture that tastes of one ingredient
+# The Picture That Tastes of One Ingredient — One Glossy Red Chilli
 
-[![make.fun](https://make.fun/badge/the-picture-that-tastes-of-one-20261122-2047.svg)](https://make.fun/bounty/the-picture-that-tastes-of-one-20261122-2047)
-[![rank](https://make.fun/badge/the-picture-that-tastes-of-one-20261122-2047/prosky1/the-picture-that-tastes-of-one-20261122-2047-entry/rank.svg)](https://make.fun/bounty/the-picture-that-tastes-of-one-20261122-2047)
-[![reward](https://make.fun/badge/the-picture-that-tastes-of-one-20261122-2047/prosky1/the-picture-that-tastes-of-one-20261122-2047-entry/reward.svg)](https://make.fun/bounty/the-picture-that-tastes-of-one-20261122-2047)
+[![make.fun](https://make.fun/bounty/the-picture-that-tastes-of-one-20261122-2047/badge.svg)](https://make.fun/bounty/the-picture-that-tastes-of-one-20261122-2047)
+[![competition](https://make.fun/competition/the-picture-that-tastes-of-one-20261122-2047/badge.svg)](https://make.fun/bounty/the-picture-that-tastes-of-one-20261122-2047)
+[![entry](https://make.fun/entry/the-picture-that-tastes-of-one-20261122-2047/badge.svg)](https://make.fun/bounty/the-picture-that-tastes-of-one-20261122-2047)
 
-A single glossy red chilli, drawn fresh with Python and Pillow: one
-plump pepper with a green stem and calyx, water droplets beading on
-its skin, a bright gloss along its curve and a warm rim of light
-underneath, resting over a dark slate board scattered with a few
-pale seeds. One ingredient, nothing else — you can almost taste the
-heat.
+One ingredient, one picture: a single glossy red chilli resting on a dark
+stone board — S-curved pod with a bright-to-dark red gradient, glossy
+highlight on the upper edge, warm rim light on the belly, green stem with a
+star calyx, water droplets on the pod, and a few pale seeds on the board.
 
-## Run
+Bounty: [The picture that tastes of one ingredient](https://make.fun/bounty/the-picture-that-tastes-of-one-20261122-2047)
+
+## How it works
+
+`main.py` draws the picture from scratch with Python 3.13 + Pillow —
+deterministic, no network. It writes a single 1024×1024 PNG
+(`entry.png`, under 1 MiB) to `$MAKEFUN_OUTPUT_DIR` (or `/output`).
 
 ```sh
 python3 main.py
 ```
 
-Writes one 1024×1024 PNG to `/output/entry.png` (or
-`$MAKEFUN_OUTPUT_DIR/entry.png`). Deterministic, no network, pure PIL.
+## Compatibility
 
-## Bounty
+The grader sandbox runs an older Pillow, so this program never passes
+`width=` to `ellipse` / `rectangle` / `arc` / `polygon`. It only uses
+`rounded_rectangle`, `line(width=...)`, `polygon`, `point`,
+`GaussianBlur`, `alpha_composite`, `blend`, and `convert`.
 
-[The picture that tastes of one ingredient](https://make.fun/bounty/the-picture-that-tastes-of-one-20261122-2047)
+## License
+
+MIT — see [LICENSE](LICENSE).
